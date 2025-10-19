@@ -1,9 +1,24 @@
 <!doctype html><meta charset="utf-8">
-<title>Direct Poster (Personal)</title>
+<title>Connect TikTok</title>
 <main style="max-width:720px;margin:40px auto;font:16px/1.6 system-ui">
   <h1>Direct Poster (Personal)</h1>
-  <p>Personal tool to publish videos to my own TikTok account via the Content Posting API (Direct Post).</p>
-  <p><a href="./oauth/callback.html">Connect TikTok (OAuth)</a></p>
+  <button id="connect">Connect TikTok (OAuth)</button>
   <p><a href="./privacy.html">Privacy</a> · <a href="./tos.html">Terms</a></p>
-  <p>Contact: tvneverbusiness@gmail.com</p>
 </main>
+<script>
+  const clientKey   = 'awue31f9hnjr9r51'; // from TikTok portal
+  const redirectUri = 'https://hodgy2448.github.io/tiktok-app-policy-web/oauth/callback.html';
+  const scope       = 'video.publish';
+  const state       = Math.random().toString(36).slice(2); // any CSRF token you like
+
+  document.getElementById('connect').onclick = () => {
+    const authUrl =
+      'https://www.tiktok.com/v2/auth/authorize/' +
+      '?client_key='   + encodeURIComponent(clientKey) +
+      '&scope='        + encodeURIComponent(scope) +
+      '&response_type=code' +
+      '&redirect_uri=' + encodeURIComponent(redirectUri) +
+      '&state='        + encodeURIComponent(state);
+    location.href = authUrl;
+  };
+</script>
