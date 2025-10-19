@@ -9,8 +9,15 @@
 
   <hr style="margin:24px 0;opacity:.2">
 
-  <!-- Paste token + upload UI -->
+  <!-- Proxy + token + upload UI -->
   <h2 style="font-size:18px;margin:0 0 8px">Direct Post (FILE_UPLOAD)</h2>
+
+  <label>Proxy base URL (Cloudflare/Vercel)
+    <small style="opacity:.7">https://tiktok-proxy.populargamingcontent.workers.dev/</small>
+  </label>
+  <input id="proxy" type="url" placeholder="https://tiktok-proxy.populargamingcontent.workers.dev"
+         style="width:100%;padding:10px;border:1px solid #ccc;border-radius:8px;margin-bottom:8px">
+
   <label>Access token (paste a fresh one)</label>
   <input id="accessToken" type="password" placeholder="Bearer access token"
          style="width:100%;padding:10px;border:1px solid #ccc;border-radius:8px">
@@ -53,15 +60,55 @@
     location.href = authUrl;
   };
 
-  // ===== Minimal Direct Post (FILE_UPLOAD) =====
+  // ===== Helpers =====
   const $ = id => document.getElementById(id);
   const log = (...a) => {
     $('log').textContent += a.map(x => typeof x==='string' ? x : JSON.stringify(x,null,2)).join(' ') + '\n';
     $('log').scrollTop = $('log').scrollHeight;
   };
+  // Persist proxy base locally
+  (function initProxySetting(){
+    const saved = localStorage.getItem('tt_proxy_base');
+    if (saved) $('proxy').value = saved;
+    $('proxy').addEventListener('change', () => {
+      localStorage.setItem('tt_proxy_base', $('proxy').value.trim());
+    });
+  })();
+  // Optional: auto-fill access token from URL hash: #access_token=...
+  (function autoFillTokenFromHash(){
+    const m = location.hash.match(/access_token=([^&]+)/);
+    if (m) {
+      const tok = decodeURIComponent(m[1]);
+      $('accessToken').value = tok;
+      sessionStorage.setItem('tt_access_token', tok);
+    }
+  })();
 
+  async function postJson(url, headers, body) {
+    let resp;
+    try {
+      resp = await fetch(url, {
+        method: 'POST',
+        headers: Object.assign({'Content-Type':'application/json; charset=UTF-8'}, headers || {}),
+        body: JSON.stringify(body || {})
+      });
+    } catch (e) {
+      // Network/CORS preflight issues show up here
+      log('Network error calling', url, String(e));
+      throw e;
+    }
+    const text = await resp.text();
+    let json;
+    try { json = text ? JSON.parse(text) : {}; } catch { json = { raw:text }; }
+    return { ok: resp.ok, status: resp.status, json };
+  }
+
+  // ===== Direct Post (with proxy for init/status) =====
   $('uploadBtn').onclick = async () => {
     try {
+      const proxyBase = $('proxy').value.trim().replace(/\/+$/,''); // no trailing slash
+      if (!proxyBase) { alert('Enter your proxy base URL first.'); return; }
+
       const accessToken = $('accessToken').value.trim();
       if (!accessToken) { alert('Paste your access token first.'); return; }
 
@@ -70,7 +117,7 @@
 
       const title = $('title').value || 'Demo via API';
 
-      // A) init
+      // A) init (via proxy)
       log('Init Direct Post…');
       const initBody = {
         post_info: { title, privacy_level: 'SELF_ONLY' }, // unaudited apps => private
@@ -82,51 +129,43 @@
         }
       };
 
-      const initResp = await fetch('https://open.tiktokapis.com/v2/post/publish/video/init/', {
-        method: 'POST',
-        headers: {
-          'Authorization': 'Bearer ' + accessToken,
-          'Content-Type': 'application/json; charset=UTF-8'
-        },
-        body: JSON.stringify(initBody)
-      });
-      const initJson = await initResp.json();
-      log('init response:', initJson);
-      if (!initResp.ok) { alert('Init failed. See Log.'); return; }
+      const initCall = await postJson(
+        proxyBase + '/init',
+        { 'Authorization': 'Bearer ' + accessToken },
+        initBody
+      );
+      log('init response:', initCall.json);
+      if (!initCall.ok) { alert('Init failed (see Log).'); return; }
 
-      const publishId = initJson?.data?.publish_id;
-      const uploadUrl = initJson?.data?.upload_url;
-      if (!publishId || !uploadUrl) { alert('Missing publish_id/upload_url.'); return; }
+      const publishId = initCall.json?.data?.publish_id;
+      const uploadUrl = initCall.json?.data?.upload_url;
+      if (!publishId || !uploadUrl) { alert('Missing publish_id/upload_url from init.'); return; }
 
-      // B) upload (single chunk)
+      // B) upload (single chunk) — direct to TikTok signed URL
       log('Uploading…');
       const upHeaders = new Headers();
       upHeaders.set('Content-Type', file.type || 'video/mp4');
-      // Browser sets Content-Length automatically; set Content-Range for chunk info
       upHeaders.set('Content-Range', `bytes 0-${file.size - 1}/${file.size}`);
 
       const upResp = await fetch(uploadUrl, { method: 'PUT', headers: upHeaders, body: file });
       const upText = await upResp.text();
       log('upload status:', upResp.status, upResp.statusText);
       if (upText) log('upload body:', upText);
-      if (!upResp.ok) { alert('Upload failed. See Log.'); return; }
+      if (!upResp.ok) { alert('Upload failed (see Log).'); return; }
 
-      // C) poll status
+      // C) poll status (via proxy)
       log('Polling status…');
       let status = 'UNKNOWN';
       for (let i = 0; i < 30; i++) {
         await new Promise(r => setTimeout(r, 3000));
-        const statResp = await fetch('https://open.tiktokapis.com/v2/post/publish/status/fetch/', {
-          method: 'POST',
-          headers: {
-            'Authorization': 'Bearer ' + accessToken,
-            'Content-Type': 'application/json; charset=UTF-8'
-          },
-          body: JSON.stringify({ publish_id: publishId })
-        });
-        const statJson = await statResp.json();
-        status = statJson?.data?.publish_status || 'UNKNOWN';
-        log(`poll ${i+1}:`, statJson);
+        const statCall = await postJson(
+          proxyBase + '/status',
+          { 'Authorization': 'Bearer ' + accessToken },
+          { publish_id: publishId }
+        );
+        log(`poll ${i+1}:`, statCall.json);
+        if (!statCall.ok) { alert('Status poll failed (see Log).'); return; }
+        status = statCall.json?.data?.publish_status || 'UNKNOWN';
         if (['PUBLISH_COMPLETE','PUBLISH_FAILED','PUBLISH_PARTIAL_FAIL'].includes(status)) break;
       }
 
