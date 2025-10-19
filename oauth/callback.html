@@ -1,0 +1,12 @@
+<!doctype html><meta charset="utf-8">
+<title>TikTok OAuth Callback</title>
+<main style="max-width:720px;margin:40px auto;font:16px/1.6 system-ui">
+  <h1>OAuth Callback</h1>
+  <p id="out">Waiting for code…</p>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const code = params.get("code");
+    document.getElementById("out").textContent =
+      code ? "Authorization code: " + code : "No code in URL.";
+  </script>
+</main>
