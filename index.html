@@ -2,10 +2,41 @@
 <title>Connect TikTok</title>
 <main style="max-width:720px;margin:40px auto;font:16px/1.6 system-ui">
   <h1>Direct Poster (Personal)</h1>
+
+  <!-- Connect / OAuth -->
   <button id="connect">Connect TikTok (OAuth)</button>
   <p><a href="./privacy.html">Privacy</a> · <a href="./tos.html">Terms</a></p>
+
+  <hr style="margin:24px 0;opacity:.2">
+
+  <!-- Paste token + upload UI -->
+  <h2 style="font-size:18px;margin:0 0 8px">Direct Post (FILE_UPLOAD)</h2>
+  <label>Access token (paste a fresh one)</label>
+  <input id="accessToken" type="password" placeholder="Bearer access token"
+         style="width:100%;padding:10px;border:1px solid #ccc;border-radius:8px">
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+    <div style="flex:1;min-width:220px">
+      <label>Caption</label>
+      <input id="title" type="text" value="Demo via API #review"
+             style="width:100%;padding:10px;border:1px solid #ccc;border-radius:8px">
+    </div>
+    <div style="flex:1;min-width:220px">
+      <label>Video file</label>
+      <input id="file" type="file" accept="video/*">
+    </div>
+  </div>
+
+  <button id="uploadBtn" style="margin-top:12px;padding:10px 14px;border-radius:8px">
+    Post to TikTok
+  </button>
+
+  <h3 style="margin:18px 0 6px">Log</h3>
+  <pre id="log" style="background:#f6f7f8;border:1px solid #ddd;border-radius:8px;padding:12px;max-height:320px;overflow:auto"></pre>
 </main>
+
 <script>
+  // ===== OAuth connect (unchanged) =====
   const clientKey   = 'sbawosht5mqk22behl'; // from TikTok portal
   const redirectUri = 'https://hodgy2448.github.io/tiktok-app-policy-web/oauth/callback.html';
   const scope       = 'video.publish';
@@ -20,5 +51,92 @@
       '&redirect_uri=' + encodeURIComponent(redirectUri) +
       '&state='        + encodeURIComponent(state);
     location.href = authUrl;
+  };
+
+  // ===== Minimal Direct Post (FILE_UPLOAD) =====
+  const $ = id => document.getElementById(id);
+  const log = (...a) => {
+    $('log').textContent += a.map(x => typeof x==='string' ? x : JSON.stringify(x,null,2)).join(' ') + '\n';
+    $('log').scrollTop = $('log').scrollHeight;
+  };
+
+  $('uploadBtn').onclick = async () => {
+    try {
+      const accessToken = $('accessToken').value.trim();
+      if (!accessToken) { alert('Paste your access token first.'); return; }
+
+      const file = $('file').files?.[0];
+      if (!file) { alert('Choose a video file.'); return; }
+
+      const title = $('title').value || 'Demo via API';
+
+      // A) init
+      log('Init Direct Post…');
+      const initBody = {
+        post_info: { title, privacy_level: 'SELF_ONLY' }, // unaudited apps => private
+        source_info: {
+          source: 'FILE_UPLOAD',
+          video_size: file.size,
+          chunk_size: file.size,
+          total_chunk_count: 1
+        }
+      };
+
+      const initResp = await fetch('https://open.tiktokapis.com/v2/post/publish/video/init/', {
+        method: 'POST',
+        headers: {
+          'Authorization': 'Bearer ' + accessToken,
+          'Content-Type': 'application/json; charset=UTF-8'
+        },
+        body: JSON.stringify(initBody)
+      });
+      const initJson = await initResp.json();
+      log('init response:', initJson);
+      if (!initResp.ok) { alert('Init failed. See Log.'); return; }
+
+      const publishId = initJson?.data?.publish_id;
+      const uploadUrl = initJson?.data?.upload_url;
+      if (!publishId || !uploadUrl) { alert('Missing publish_id/upload_url.'); return; }
+
+      // B) upload (single chunk)
+      log('Uploading…');
+      const upHeaders = new Headers();
+      upHeaders.set('Content-Type', file.type || 'video/mp4');
+      // Browser sets Content-Length automatically; set Content-Range for chunk info
+      upHeaders.set('Content-Range', `bytes 0-${file.size - 1}/${file.size}`);
+
+      const upResp = await fetch(uploadUrl, { method: 'PUT', headers: upHeaders, body: file });
+      const upText = await upResp.text();
+      log('upload status:', upResp.status, upResp.statusText);
+      if (upText) log('upload body:', upText);
+      if (!upResp.ok) { alert('Upload failed. See Log.'); return; }
+
+      // C) poll status
+      log('Polling status…');
+      let status = 'UNKNOWN';
+      for (let i = 0; i < 30; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        const statResp = await fetch('https://open.tiktokapis.com/v2/post/publish/status/fetch/', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + accessToken,
+            'Content-Type': 'application/json; charset=UTF-8'
+          },
+          body: JSON.stringify({ publish_id: publishId })
+        });
+        const statJson = await statResp.json();
+        status = statJson?.data?.publish_status || 'UNKNOWN';
+        log(`poll ${i+1}:`, statJson);
+        if (['PUBLISH_COMPLETE','PUBLISH_FAILED','PUBLISH_PARTIAL_FAIL'].includes(status)) break;
+      }
+
+      if (status === 'PUBLISH_COMPLETE') alert('Success: PUBLISH_COMPLETE');
+      else alert('Finished with status: ' + status + ' (see Log).');
+
+    } catch (err) {
+      console.error(err);
+      log('Error:', String(err));
+      alert('Something went wrong. See Log.');
+    }
   };
 </script>
